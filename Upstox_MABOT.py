@@ -2,15 +2,14 @@ import streamlit as st
 import pandas as pd
 import asyncio
 from datetime import datetime, timedelta
-from upstox_api.api import Upstox, MarketFeedType, OrderType, TransactionType, ProductType
+from upstox import Upstox
+from upstox.enums import MarketFeedType, OrderType, TransactionType, ProductType
 import json
 import os
 import requests
 from urllib.parse import urlencode
 
 STATE_FILE = "bot_state_upstox.json"
-
-# --- Shared functions ---
 
 def save_state():
     try:
@@ -168,69 +167,7 @@ def handle_ws_message(message):
     tick_data = json.loads(message)
     asyncio.run_coroutine_threadsafe(on_tick(tick_data), st.session_state.loop)
 
-# --- OAuth Page ---
-
-def oauth_page():
-    st.title("Upstox OAuth Token Generator")
-
-    API_BASE_AUTH_URL = "https://upstox.com/mapi/oauth2/authorize"
-    API_BASE_TOKEN_URL = "https://upstox.com/mapi/oauth2/token"
-
-    def generate_auth_url(api_key, redirect_uri, state=""):
-        params = {
-            "apiKey": api_key,
-            "redirect_uri": redirect_uri,
-            "response_type": "code",
-            "state": state
-        }
-        from urllib.parse import urlencode
-        return f"{API_BASE_AUTH_URL}?{urlencode(params)}"
-
-    def exchange_code_for_token(api_key, api_secret, redirect_uri, auth_code):
-        data = {
-            "apiKey": api_key,
-            "apiSecret": api_secret,
-            "grant_type": "authorization_code",
-            "redirect_uri": redirect_uri,
-            "code": auth_code
-        }
-        headers = {"Content-Type": "application/x-www-form-urlencoded"}
-        response = requests.post(API_BASE_TOKEN_URL, data=data, headers=headers)
-        return response
-
-    api_key = st.text_input("API Key")
-    api_secret = st.text_input("API Secret", type="password")
-    redirect_uri = st.text_input("Redirect URI")
-    state = st.text_input("State (optional)")
-
-    if st.button("Generate Authorization URL"):
-        if not (api_key and redirect_uri):
-            st.error("Please enter API Key and Redirect URI")
-        else:
-            url = generate_auth_url(api_key, redirect_uri, state)
-            st.markdown(f"### Authorization URL")
-            st.write(url)
-            st.markdown("Open this URL in your browser, login, allow access, and copy the `code` parameter from the redirected URL.")
-
-    auth_code = st.text_input("Authorization Code (from redirect URL)")
-
-    if st.button("Get Access Token"):
-        if not (api_key and api_secret and redirect_uri and auth_code):
-            st.error("Fill all fields before requesting access token")
-        else:
-            resp = exchange_code_for_token(api_key, api_secret, redirect_uri, auth_code)
-            if resp.status_code == 200:
-                token_data = resp.json()
-                st.success("Access token obtained successfully!")
-                st.write("Access Token:", token_data.get("access_token"))
-                st.write("Refresh Token:", token_data.get("refresh_token"))
-                st.write("Expires In (seconds):", token_data.get("expires_in"))
-            else:
-                st.error(f"Failed to obtain token: {resp.text}")
-
-# --- Trading Bot Page ---
-
-def trading_bot_page():
+def main():
     st.title("Upstox Nifty50 MA Bot")
 
     API_KEY = st.sidebar.text_input("API Key")
@@ -268,18 +205,6 @@ def trading_bot_page():
         u.subscribe([int(nifty_token)])
 
         loop.run_forever()
-
-# --- Main App Navigation ---
-
-PAGES = {
-    "OAuth Token Generator": oauth_page,
-    "Trading Bot": trading_bot_page,
-}
-
-def main():
-    st.sidebar.title("Navigation")
-    page = st.sidebar.radio("Go to", list(PAGES.keys()))
-    PAGES[page]()
 
 if __name__ == "__main__":
     main()
