@@ -1,2 +1,0 @@
-pip install streamlit pandas upstox-python-sdk requests
-pip install upstox-python-sdk
