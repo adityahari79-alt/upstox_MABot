@@ -11,6 +11,8 @@ from urllib.parse import urlencode
 
 STATE_FILE = "bot_state_upstox.json"
 
+# ---------- Shared State and Helper Functions ----------
+
 def save_state():
     try:
         with open(STATE_FILE, "w") as f:
@@ -68,7 +70,29 @@ def update_candles(ts, price, minutes=5):
         c['close'] = price
     st.session_state.candles = candles
 
-async def on_tick(tick):
+# ---------- WebSocket Subscriber Class ----------
+
+class UpstoxSubscriber:
+    def __init__(self, upstox_client):
+        self.u = upstox_client
+
+    def on_connect(self):
+        st.session_state.status_box.info("✅ WebSocket connected")
+        self.u.subscribe(st.session_state.subscribed_tokens)
+
+    def on_ticks(self, ticks):
+        for tick in ticks:
+            asyncio.run_coroutine_threadsafe(process_tick(tick), st.session_state.loop)
+
+    def on_disconnect(self):
+        st.session_state.status_box.warning("⚠️ WebSocket disconnected")
+
+    def on_error(self, error):
+        st.session_state.status_box.error(f"⚠️ WebSocket error: {error}")
+
+# ---------- Async Tick Processor ----------
+
+async def process_tick(tick):
     try:
         ts = datetime.fromtimestamp(tick['timestamp'] / 1000)
         ltp = float(tick['last_price'])
@@ -162,12 +186,9 @@ async def on_tick(tick):
             st.session_state.position = None
             save_state()
 
-def handle_ws_message(message):
-    import json
-    tick_data = json.loads(message)
-    asyncio.run_coroutine_threadsafe(on_tick(tick_data), st.session_state.loop)
+# ---------- Trading Bot Page ----------
 
-def main():
+def trading_bot_page():
     st.title("Upstox Nifty50 MA Bot")
 
     API_KEY = st.sidebar.text_input("API Key")
@@ -184,6 +205,7 @@ def main():
     st.session_state.lot_size = lot_size
     st.session_state.paper_mode = paper_mode
     st.session_state.expiry_date = expiry_date
+    st.session_state.subscribed_tokens = [int(nifty_token)]
 
     st.session_state.status_box = st.empty()
     st.session_state.trade_log = st.empty()
@@ -194,17 +216,98 @@ def main():
             st.error("Fill all API & config fields")
             return
 
-        u = Upstox(API_KEY, ACCESS_TOKEN)
-        st.session_state.u = u
+        try:
+            u = Upstox(API_KEY, ACCESS_TOKEN)
+            st.session_state.u = u
+        except Exception as e:
+            st.error(f"Failed to initialize Upstox client: {e}")
+            return
 
         loop = asyncio.new_event_loop()
         st.session_state.loop = loop
         asyncio.set_event_loop(loop)
 
-        u.start_websocket(handle_ws_message, MarketFeedType.Full)
-        u.subscribe([int(nifty_token)])
+        subscriber = UpstoxSubscriber(u)
+
+        u.start_websocket(subscriber.on_ticks,
+                          MarketFeedType.Full,
+                          on_connect=subscriber.on_connect,
+                          on_disconnect=subscriber.on_disconnect,
+                          on_error=subscriber.on_error)
 
         loop.run_forever()
+
+# ---------- OAuth Token Generator Page ----------
+
+def oauth_token_generator_page():
+    st.title("Upstox OAuth Token Generator")
+
+    API_BASE_AUTH_URL = "https://upstox.com/mapi/oauth2/authorize"
+    API_BASE_TOKEN_URL = "https://upstox.com/mapi/oauth2/token"
+
+    def generate_auth_url(api_key, redirect_uri, state=""):
+        params = {
+            "apiKey": api_key,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "state": state
+        }
+        from urllib.parse import urlencode
+        return f"{API_BASE_AUTH_URL}?{urlencode(params)}"
+
+    def exchange_code_for_token(api_key, api_secret, redirect_uri, auth_code):
+        data = {
+            "apiKey": api_key,
+            "apiSecret": api_secret,
+            "grant_type": "authorization_code",
+            "redirect_uri": redirect_uri,
+            "code": auth_code
+        }
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        response = requests.post(API_BASE_TOKEN_URL, data=data, headers=headers)
+        return response
+
+    api_key = st.text_input("API Key")
+    api_secret = st.text_input("API Secret", type="password")
+    redirect_uri = st.text_input("Redirect URI")
+    state = st.text_input("State (optional)")
+
+    if st.button("Generate Authorization URL"):
+        if not (api_key and redirect_uri):
+            st.error("Please enter API Key and Redirect URI")
+        else:
+            url = generate_auth_url(api_key, redirect_uri, state)
+            st.markdown(f"### Authorization URL")
+            st.write(url)
+            st.markdown("Open this URL in your browser, login, allow access, and copy the `code` parameter from the redirected URL.")
+
+    auth_code = st.text_input("Authorization Code (from redirect URL)")
+
+    if st.button("Get Access Token"):
+        if not (api_key and api_secret and redirect_uri and auth_code):
+            st.error("Fill all fields before requesting access token")
+        else:
+            resp = exchange_code_for_token(api_key, api_secret, redirect_uri, auth_code)
+            if resp.status_code == 200:
+                token_data = resp.json()
+                st.success("Access token obtained successfully!")
+                st.write("Access Token:", token_data.get("access_token"))
+                st.write("Refresh Token:", token_data.get("refresh_token"))
+                st.write("Expires In (seconds):", token_data.get("expires_in"))
+            else:
+                st.error(f"Failed to obtain token: {resp.text}")
+
+# ---------- App Navigation ----------
+
+PAGES = {
+    "OAuth Token Generator": oauth_token_generator_page,
+    "Trading Bot": trading_bot_page,
+}
+
+def main():
+    st.sidebar.title("Navigation")
+    page = st.sidebar.radio("Select Page", list(PAGES.keys()))
+    PAGES[page]()
 
 if __name__ == "__main__":
     main()
