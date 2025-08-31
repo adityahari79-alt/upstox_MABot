@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import asyncio
 from datetime import datetime, timedelta
-from upstox import Upstox
+from upstox import upstox
 from upstox.enums import MarketFeedType, OrderType, TransactionType, ProductType
 import json
 import os
@@ -311,3 +311,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
