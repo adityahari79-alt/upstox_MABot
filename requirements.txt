@@ -3,7 +3,8 @@ pandas
 requests
 protobuf
 websockets
-smartapi
+smartapi-python
+
 
 
 
